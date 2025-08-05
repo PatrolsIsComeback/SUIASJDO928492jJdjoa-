@@ -1,0 +1,287 @@
+// index.js (Sizin verdiğiniz kod, entegre edilmiş hali)
+
+
+
+const { Client, GatewayIntentBits, Collection, REST, Routes, EmbedBuilder } = require('discord.js');
+
+const { TOKEN, PREFIX, OWNER_ID, HANGMAN_CATEGORY_ID, ADAM_ASMACA_CREATE_ROOM_CHANNEL_ID } = require('./utils/config'); // ADAM_ASMACA_CREATE_ROOM_CHANNEL_ID eklendi
+
+const fs = require('node:fs');
+
+const path = require('node:path');
+
+
+
+const { startNewsChecker, stopNewsChecker } = require('./utils/newsChecker');
+
+const { getSystemSettings, saveSystemSettings } = require('./utils/db');
+
+const hangmanManager = require('./utils/hangmanManager');
+
+
+
+const client = new Client({
+
+    intents: [
+
+        GatewayIntentBits.Guilds,
+
+        GatewayIntentBits.GuildMessages,
+
+        GatewayIntentBits.MessageContent,
+
+        GatewayIntentBits.GuildMembers,
+
+        GatewayIntentBits.GuildPresences,
+
+    ],
+
+});
+
+
+
+client.commands = new Collection();
+
+client.cooldowns = new Collection();
+
+client.prefixCommands = new Collection();
+
+
+
+client.userChatHistory = new Map();
+
+
+
+const slashCommands = [];
+
+const commandsPath = path.join(__dirname, 'commands');
+
+const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+
+
+
+for (const file of commandFiles) {
+
+    const filePath = path.join(commandsPath, file);
+
+    const command = require(filePath);
+
+
+
+    if ('data' in command && 'execute' in command) {
+
+        client.commands.set(command.data.name, command);
+
+        slashCommands.push(command.data.toJSON());
+
+    }
+
+
+
+    if (command.prefix && 'name' in command.prefix && 'execute' in command.prefix) {
+
+        client.prefixCommands.set(command.prefix.name, command.prefix);
+
+        if (command.prefix.aliases && Array.isArray(command.prefix.aliases)) {
+
+            command.prefix.aliases.forEach(alias => {
+
+                client.prefixCommands.set(alias, command.prefix);
+
+            });
+
+        }
+
+    }
+
+}
+
+
+
+const eventsPath = path.join(__dirname, 'events');
+
+const eventFiles = fs.readdirSync(eventsPath).filter(file => file.endsWith('.js'));
+
+
+
+for (const file of eventFiles) {
+
+    const filePath = path.join(eventsPath, file);
+
+    const event = require(filePath);
+
+    if (event.once) {
+
+        client.once(event.name, (...args) => event.execute(...args, client));
+
+    } else {
+
+        client.on(event.name, (...args) => event.execute(...args, client));
+
+    }
+
+}
+
+
+
+client.once('ready', async () => {
+
+    console.log(`Hazır! ${client.user.tag} olarak giriş yapıldı.`);
+
+
+
+    // HANGMAN_CATEGORY_ID artık doğrudan hangmanManager içinde config'den alınacak
+
+    // hangmanManager.HANGMAN_CATEGORY_ID = HANGMAN_CATEGORY_ID; // Bu satıra artık gerek yok
+
+    console.log(`[index.js] Adam Asmaca kategori ID'si ayarlandı: ${HANGMAN_CATEGORY_ID}`);
+
+
+
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+
+
+
+    try {
+
+        console.log(`Toplam ${slashCommands.length} adet uygulama (/) komutu yenileniyor.`);
+
+        
+
+        // Buraya botun olduğu sunucunun ID'sını GİR!
+
+        const guildId = '1388093711828910140'; 
+
+
+
+        const data = await rest.put(
+
+            Routes.applicationGuildCommands(client.user.id, guildId), 
+
+            { body: slashCommands }, 
+
+        );
+
+
+
+        console.log(`Başarıyla ${data.length} adet uygulama (/) komutu yüklendi ve sunucuya kaydedildi.`);
+
+    } catch (error) {
+
+        console.error('Uygulama (/) komutları kaydedilirken hata oluştu:', error);
+
+    }
+
+
+
+    const settings = getSystemSettings(); 
+
+    if (settings.haberSistemi.active) {
+
+        startNewsChecker(client); 
+
+        console.log('Haber sistemi ayarları aktif: Başlatıldı.');
+
+    } else {
+
+        console.log('Haber sistemi ayarlarda kapalı olduğu için otomatik başlatılmadı.');
+
+    }
+
+
+
+    if (settings.hangmanSystem && typeof settings.hangmanSystem.active === 'boolean') {
+
+        hangmanManager.setHangmanSystemStatus(settings.hangmanSystem.active);
+
+        console.log(`Adam Asmaca sistemi açılışta ${settings.hangmanSystem.active ? 'aktif' : 'pasif'} olarak ayarlandı.`);
+
+    } else {
+
+        hangmanManager.setHangmanSystemStatus(false);
+
+        console.log('Adam Asmaca sistemi ayarı bulunamadı, varsayılan olarak pasif ayarlandı.');
+
+    }
+
+});
+
+
+
+client.on('messageCreate', async message => {
+
+    if (message.author.bot || !message.content.startsWith(PREFIX)) return;
+
+
+
+    const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+
+    const commandName = args.shift().toLowerCase();
+
+
+
+    const command = client.prefixCommands.get(commandName);
+
+
+
+    if (!command) return;
+
+
+
+    try {
+
+        await command.execute(message, args, client); 
+
+    } catch (error) {
+
+        console.error(`Prefix komutu "${commandName}" yürütülürken bir hata oluştu:`, error);
+
+        const errorEmbed = new EmbedBuilder()
+
+            .setColor('#FF0000')
+
+            .setTitle('Hata!')
+
+            .setDescription(`\`${PREFIX}${commandName}\` komutunu çalıştırırken bir sorun oluştu. Lütfen daha sonra tekrar dene.`)
+
+            .setTimestamp()
+
+            .setFooter({ text: 'SomeSub Bot', iconURL: client.user.displayAvatarURL() });
+
+        await message.reply({ embeds: [errorEmbed] }).catch(err => console.error("Hata embed'i gönderilemedi:", err));
+
+    }
+
+});
+
+
+
+
+
+client.login(TOKEN);
+
+
+
+process.on('unhandledRejection', async (error) => {
+
+    console.error('[UNHANDLED REJECTION]', error);
+
+    const owner = await client.users.fetch(OWNER_ID).catch(() => null);
+
+    if (owner) owner.send(`[UNHANDLED REJECTION] Botta bir hata oluştu: \n\`\`\`js\n${error.stack}\n\`\`\``).catch(console.error);
+
+});
+
+
+
+process.on('uncaughtException', async (error) => {
+
+    console.error('[UNCAUGHT EXCEPTION]', error);
+
+    const owner = await client.users.fetch(OWNER_ID).catch(() => null);
+
+    if (owner) owner.send(`[UNCAUGHT EXCEPTION] Botta kritik bir hata oluştu: \n\`\`\`js\n${error.stack}\n\`\`\``).catch(console.error);
+
+    process.exit(1);
+
+});

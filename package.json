@@ -1,0 +1,21 @@
+{
+  "name": "onimesubs",
+  "version": "1.0.0",
+  "description": "Discord Bot for OnimeSubs Anime Management",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "postinstall": "echo Skipping postinstall to avoid freeze"
+  },
+  "keywords": [],
+  "author": "YourName",
+  "license": "ISC",
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "node-fetch": "^2.6.7",
+    "rss-parser": "^3.13.0",
+    "node-cron": "^3.0.3",
+    "cheerio": "^1.0.0-rc.12"
+  }
+}
