@@ -1,0 +1,576 @@
+// events/messageCreate.js (GÜNCELLEMELER YAPILDI - HATA YÖNETİMİ EKLENDİ)
+const { PREFIX, OWNER_ID, UPLOADER_ROLE_ID, TRANSLATOR_ROLE_ID, MENULU_ROL_CHANNEL_ID, ADAM_ASMACA_CREATE_ROOM_CHANNEL_ID } = require('../utils/config');
+const { getSystemSettings, saveSystemSettings, getBotStats, saveBotStats, getAnimes } = require('../utils/db');
+const { EmbedBuilder, ChannelType, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+const os = require('os');
+const { startNewsChecker, stopNewsChecker, getCurrentNewsJob, RSS_FEEDS } = require('../utils/newsChecker');
+const { sendOrUpdateRoleMenu, disableRoleMenu, ROLES_INFO } = require('../utils/menuluRolUtils');
+const hangmanManager = require('../utils/hangmanManager');
+
+module.exports = {
+    name: 'messageCreate',
+    async execute(message, client) {
+        if (message.author.bot || !message.guild) return;
+
+        const content = message.content.toLowerCase();
+        let settings = getSystemSettings(); 
+
+        const checkPermission = (member, requiredRoleIDs, ownerId) => {
+            return member.user.id === ownerId || requiredRoleIDs.some(roleId => member.roles.cache.has(roleId));
+        };
+
+        // ---------------------- PREFIX KOMUTLARI ----------------------
+        if (message.content.startsWith(PREFIX)) {
+            const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+            const commandName = args.shift().toLowerCase();
+
+            try { // Tüm prefix komutlarını bir try-catch bloğuna alıyoruz
+                const botStats = getBotStats();
+                botStats.commandsUsed++;
+                saveBotStats(botStats);
+
+                // Adam Asmaca Sistem Kontrolü: Bu komutlar her zaman çalışmalı
+                if (commandName === 'adam-asmaca-ac') {
+                    if (message.author.id !== OWNER_ID) {
+                        return message.reply({ content: 'Bu komutu sadece bot sahibi kullanabilir.' });
+                    }
+                    hangmanManager.setHangmanSystemStatus(true);
+                    return message.reply('Adam Asmaca sistemi başarıyla açıldı!');
+                }
+
+                if (commandName === 'adam-asmaca-kapat') {
+                    if (message.author.id !== OWNER_ID) {
+                        return message.reply({ content: 'Bu komutu sadece bot sahibi kullanabilir.' });
+                    }
+                    hangmanManager.setHangmanSystemStatus(false);
+                    return message.reply('Adam Asmaca sistemi başarıyla kapatıldı!');
+                }
+
+                // Adam Asmaca komutları için sistemin aktif olup olmadığını kontrol et
+                if (!hangmanManager.getHangmanSystemStatus() && commandName.startsWith('adam-asmaca-') && commandName !== 'adam-asmaca-ac' && commandName !== 'adam-asmaca-kapat') {
+                    if (message.author.id !== OWNER_ID) { 
+                        return message.reply({ content: 'Adam Asmaca sistemi şu an kapalı. Lütfen bir yetkilinin sistemi açmasını bekleyin.' });
+                    }
+                }
+                
+                // Mevcut komutlar...
+                if (commandName === 'sa-as') { 
+                    if (args[0] === 'aç' || args[0] === 'kapat') {
+                        if (!checkPermission(message.member, [UPLOADER_ROLE_ID, TRANSLATOR_ROLE_ID], OWNER_ID)) {
+                            return message.reply({ content: 'Bu komutu kullanmaya yetkiniz yok! Yalnızca yetkili ekip üyeleri ve bot sahibi kullanabilir.' });
+                        }
+                        const newState = args[0] === 'aç';
+                        settings.saas.active = newState;
+                        saveSystemSettings(settings);
+                        return message.reply(`Selamün Aleyküm - Aleyküm Selam sistemi başarıyla ${newState ? 'açıldı' : 'kapatıldı'}!`);
+                    } else {
+                        return message.reply(`Kullanım: \`${PREFIX}sa-as [aç/kapat]\``);
+                    }
+                }
+
+                if (commandName === 'gunaydin') {
+                    if (args[0] === 'aç' || args[0] === 'kapat') {
+                        if (!checkPermission(message.member, [UPLOADER_ROLE_ID, TRANSLATOR_ROLE_ID], OWNER_ID)) {
+                            return message.reply({ content: 'Bu komutu kullanmaya yetkiniz yok! Yalnızca yetkili ekip üyeleri ve bot sahibi kullanabilir.' });
+                        }
+                        const newState = args[0] === 'aç';
+                        settings.gunaydin.active = newState;
+                        saveSystemSettings(settings);
+                        return message.reply(`Günaydın yanıt sistemi başarıyla ${newState ? 'açıldı' : 'kapatıldı'}!`);
+                    } else {
+                        return message.reply(`Kullanım: \`${PREFIX}gunaydin [aç/kapat]\``);
+                    }
+                }
+
+                if (commandName === 'haber-sistemi') { 
+                    if (!checkPermission(message.member, [OWNER_ID], OWNER_ID)) { 
+                        return message.reply({ content: 'Bu komutu kullanmaya yetkiniz yok! Yalnızca bot sahibi kullanabilir.' });
+                    }
+
+                    const action = args[0] ? args[0].toLowerCase() : null;
+
+                    if (action === 'aç' || action === 'ac') {
+                        if (settings.haberSistemi.active) {
+                            return message.reply('Haber sistemi zaten aktif!');
+                        }
+                        settings.haberSistemi.active = true;
+                        saveSystemSettings(settings);
+                        startNewsChecker(client); 
+                        return message.reply('Haber sistemi başarıyla açıldı! Haberler artık düzenli olarak kontrol edilecek.');
+                    } else if (action === 'kapat') {
+                        if (!settings.haberSistemi.active) {
+                            return message.reply('Haber sistemi zaten kapalı!');
+                        }
+                        settings.haberSistemi.active = false;
+                        saveSystemSettings(settings);
+                        stopNewsChecker(); 
+                        return message.reply('Haber sistemi başarıyla kapatıldı! Yeni haberler gönderilmeyecek.');
+                    } else {
+                        return message.reply(`Kullanım: \`${PREFIX}haber-sistemi [aç/kapat]\``);
+                    }
+                }
+
+                if (commandName === 'haber-bilgi') { 
+                    settings = getSystemSettings(); 
+
+                    const isActive = settings.haberSistemi.active;
+                    let lastCheckMessage;
+                    let nextCheckMessage;
+
+                    if (settings.haberSistemi.lastCheck) {
+                        lastCheckMessage = `<t:${Math.floor(settings.haberSistemi.lastCheck / 1000)}:R>`; 
+                    } else {
+                        lastCheckMessage = 'Henüz hiç kontrol edilmedi.';
+                    }
+
+                    if (isActive) {
+                        if (settings.haberSistemi.nextCheck) {
+                            nextCheckMessage = `<t:${Math.floor(settings.haberSistemi.nextCheck / 1000)}:R>`; 
+                        } else {
+                            const now = new Date();
+                            const nextHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0, 0);
+                            nextCheckMessage = `Yaklaşık ${Math.ceil((nextHour.getTime() - Date.now()) / (1000 * 60))} dakika içinde.`;
+                            if (nextHour.getTime() < Date.now()) { 
+                                const nextNextHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 2, 0, 0);
+                                nextCheckMessage = `Yaklaşık ${Math.ceil((nextNextHour.getTime() - Date.now()) / (1000 * 60))} dakika içinde.`;
+                            }
+                            nextCheckMessage += " (İlk kontrol sonrası kesinleşir)";
+                        }
+                    } else {
+                        nextCheckMessage = 'Sistem kapalı, zamanlanmış kontrol yok.';
+                    }
+
+                    const embed = new EmbedBuilder()
+                        .setColor(isActive ? '#00FF00' : '#FF0000')
+                        .setTitle('Haber Sistemi Durumu')
+                        .addFields(
+                            { name: 'Durum', value: isActive ? '✅ Aktif' : '❌ Kapalı', inline: true },
+{ name: 'Çeviri Sistemi', value: '✅ Aktif' },
+                            { name: 'Son Kontrol', value: lastCheckMessage, inline: true },
+                            { name: 'Bir Sonraki Kontrol', value: nextCheckMessage, inline: true }
+                            
+                        );
+                        
+                    let rssSourcesField = '';
+                    RSS_FEEDS.forEach((feed, index) => {
+                        rssSourcesField += `${index + 1}. **${feed.name}**: Dil: ${feed.language.toUpperCase()}\n`;
+                    });
+                    embed.addFields({ name: 'Kullanılan RSS Kaynakları', value: rssSourcesField, inline: false });
+
+                    embed.setFooter({ text: 'SomeSub Bot', iconURL: client.user.displayAvatarURL() })
+                        .setTimestamp();
+
+                    await message.reply({ embeds: [embed] });
+                    return;
+                }
+
+                if (commandName === 'menulu-rol') {
+                    if (!checkPermission(message.member, [UPLOADER_ROLE_ID, TRANSLATOR_ROLE_ID], OWNER_ID)) {
+                        return message.reply({ content: 'Bu komutu kullanmaya yetkiniz yok! Yalnızca yetkili ekip üyeleri ve bot sahibi kullanabilir.' });
+                    }
+
+                    const action = args[0] ? args[0].toLowerCase() : null;
+
+                    if (action === 'aç' || action === 'ac') {
+                        await sendOrUpdateRoleMenu(client, message, true); 
+                    } else if (action === 'kapat') {
+                        await disableRoleMenu(client, message);
+                    } else {
+                        return message.reply(`Kullanım: \`${PREFIX}menulu-rol [aç/kapat]\`\nNot: Menü ${MENULU_ROL_CHANNEL_ID ? `<#${MENULU_ROL_CHANNEL_ID}>` : 'belirlenen kanala'} kurulur.`);
+                    }
+                    return;
+                }
+
+                if (commandName === 'menulu-rol-bilgi') {
+                    if (message.author.id !== OWNER_ID) { 
+                        return message.reply({ content: 'Bu komutu sadece bot sahibi kullanabilir.' });
+                    }
+
+                    const botStats = getBotStats();
+                    settings = getSystemSettings(); 
+
+                    const roleUsageData = botStats.roleUsage;
+
+                    let roleStatsField = '';
+                    if (ROLES_INFO.length > 0) {
+                        ROLES_INFO.forEach(roleInfo => {
+                            const count = roleUsageData[roleInfo.id] || 0;
+                            roleStatsField += `${roleInfo.emoji} **${roleInfo.name}**: Verilme Sayısı: \`${count}\`\n`;
+                        });
+                    } else {
+                        roleStatsField = 'Rol bilgileri bulunamadı veya hiç rol ayarlanmamış.';
+                    }
+
+                    const embed = new EmbedBuilder()
+                        .setColor('#f8f9fa')
+                        .setTitle('📊 Menülü Rol Sistemi İstatistikleri')
+                        .addFields(
+                            { name: 'Durum', value: settings.menuluRolSistemi.active ? '✅ Aktif' : '❌ Kapalı', inline: true },
+                            { name: 'Kanal', value: settings.menuluRolSistemi.channelId ? `<#${settings.menuluRolSistemi.channelId}>` : 'Ayarlanmadı', inline: true },
+                            { name: 'Mesaj ID', value: settings.menuluRolSistemi.messageId || 'Yok', inline: true },
+                            { name: 'Rol Kullanım Sayıları', value: roleStatsField, inline: false }
+                        )
+                        .setFooter({ text: 'SomeSub Bot | Güncel Veri', iconURL: client.user.displayAvatarURL() })
+                        .setTimestamp();
+
+                    await message.reply({ embeds: [embed] });
+                    return;
+                }
+
+                if (commandName === 'istatistik') {
+                    const developerId = OWNER_ID;
+                    if (message.author.id !== developerId) {
+                        return message.reply({ content: 'Bu komutu sadece geliştirici kullanabilir.' });
+                    }
+
+                    const totalMemory = os.totalmem();
+                    const freeMemory = os.freemem();
+                    const usedMemory = totalMemory - freeMemory;
+
+                    const usedMemoryMB = (usedMemory / 1024 / 1024).toFixed(2);
+                    const totalMemoryGB = (totalMemory / 1024 / 1024 / 1024).toFixed(2);
+                    const ramUsage = `${usedMemoryMB}MB / ${totalMemoryGB}GB`;
+
+                    const commandCount = client.commands.size; 
+
+                    const botStats = getBotStats();
+                    const ekliAnimeler = getAnimes().length;
+
+                    const eklenenAnimeler = botStats.totalAnimesAdded;
+                    const silinenAnimeler = botStats.totalAnimesRemoved;
+                    const toplamKullanilanKomut = botStats.commandsUsed;
+                    const sonGuncellemeTimestamp = botStats.lastUpdated;
+
+
+                    const embed = new EmbedBuilder()
+                        .setColor('#0099ff')
+                        .setTitle('Somesub Bot İstatistikleri')
+                        .setDescription('Botun anlık ve genel kullanım verileri.')
+                        .addFields(
+                            { name: 'Geliştirici', value: `<@${developerId}>`, inline: true },
+                            { name: 'RAM Kullanımı', value: ramUsage, inline: true },
+                            { name: 'Yüklü Komut Sayısı', value: `${commandCount}`, inline: true },
+                            { name: 'Toplam Komut Kullanımı', value: `${toplamKullanilanKomut}`, inline: true },
+                            { name: 'Ekli Animeler (Sistemde)', value: `${ekliAnimeler}`, inline: true },
+                            { name: 'Eklenen Animeler (Toplam)', value: `${eklenenAnimeler}`, inline: true },
+                            { name: 'Silinen Animeler (Toplam)', value: `${silinenAnimeler}`, inline: true },
+                            { name: 'Son Veri Güncelleme', value: `<t:${Math.floor(sonGuncellemeTimestamp / 1000)}:R>`, inline: true }
+                        )
+                        .setTimestamp()
+                        .setFooter({ text: 'Somesub Fansub Bot', iconURL: client.user.displayAvatarURL() });
+
+                    await message.reply({ embeds: [embed] });
+                    return;
+                }
+
+                if (commandName === 'sistemler') { 
+                    settings = getSystemSettings(); 
+
+                    const sistemlerEmbed = new EmbedBuilder()
+                        .setColor('#0099ff')
+                        .setTitle('Aktif Sistem Durumları')
+                        .addFields(
+                            { name: 'Selamün Aleyküm Sistemi', value: settings.saas.active ? '✅ Açık' : '❌ Kapalı', inline: true },
+                            { name: 'Günaydın Sistemi', value: settings.gunaydin.active ? '✅ Açık' : '❌ Kapalı', inline: true },
+                            { name: 'Haber Sistemi', value: settings.haberSistemi.active ? '✅ Açık' : '❌ Kapalı', inline: true },
+                            { name: 'Menülü Rol Sistemi', value: settings.menuluRolSistemi.active ? '✅ Açık' : '❌ Kapalı', inline: true },
+                            { name: 'Adam Asmaca Sistemi', value: hangmanManager.getHangmanSystemStatus() ? '✅ Açık' : '❌ Kapalı', inline: true }
+                        )
+                        .setTimestamp()
+                        .setFooter({ text: 'SomeSub Bot', iconURL: client.user.displayAvatarURL() });
+
+                    await message.reply({ embeds: [sistemlerEmbed] });
+                    return;
+                }
+
+                // --- YENİ ADAM ASMACA KOMUTLARI ---
+                if (commandName === 'adam-asmaca-oda-olustur') {
+                    if (message.channel.id !== ADAM_ASMACA_CREATE_ROOM_CHANNEL_ID) {
+                        return message.reply(`Bu komutu sadece <#${ADAM_ASMACA_CREATE_ROOM_CHANNEL_ID}> kanalında kullanabilirsiniz.`);
+                    }
+
+                    const type = args[0] ? args[0].toLowerCase() : null;
+                    const maxPlayers = parseInt(args[1]);
+
+                    if (!type || (type !== 'ozel' && type !== 'acik')) {
+                        return message.reply('Lütfen oda tipini belirtin: `!adam-asmaca-oda-olustur [ozel/acik] [maksKisiSayisi]`');
+                    }
+                    if (isNaN(maxPlayers) || maxPlayers < 2 || maxPlayers > 10) { 
+                        return message.reply('Maksimum oyuncu sayısı en az 2, en fazla 10 olmalıdır.');
+                    }
+                    
+                    const existingRoomAsCreator = Array.from(hangmanManager.activeHangmanGames.values()).find(game => game.creatorId === message.author.id && game.status !== 'ended');
+                    if (existingRoomAsCreator) {
+                        return message.reply(`Zaten bir Adam Asmaca odası oluşturdunuz veya aktif bir odanın kurucusunuz (Oda ID: \`${existingRoomAsCreator.id}\`). Yeni bir oda oluşturmak için önce mevcut odanızı bitirmelisiniz.`);
+                    }
+                    const newRoom = await hangmanManager.createHangmanRoom(message.member, type, maxPlayers, client);
+                    if (newRoom) {
+                        await message.reply(`Adam Asmaca odası başarıyla oluşturuldu! Oda ID: \`${newRoom.id}\`. Kanal: <#${newRoom.channelId}>`);
+                    } else {
+                        await message.reply('Oda oluşturulurken bir hata oluştu. Lütfen bot sahibine bildirin.');
+                    }
+                    return;
+                }
+
+                if (commandName === 'adam-asmaca-davet-et') {
+                    const game = Array.from(hangmanManager.activeHangmanGames.values()).find(g => g.creatorId === message.author.id && g.status === 'waiting');
+                    if (!game) {
+                        return message.reply('Sadece kendi oluşturduğunuz ve bekleme durumundaki bir odada davet gönderebilirsiniz.');
+                    }
+                    if (game.type !== 'ozel') {
+                        return message.reply('Bu komut sadece özel odalar için geçerlidir.');
+                    }
+                    if (message.mentions.members.size === 0) {
+                        return message.reply('Lütfen davet etmek istediğiniz üyeleri etiketleyin.');
+                    }
+
+                    for (const member of message.mentions.members.values()) {
+                        if (game.players.length >= game.maxPlayers) {
+                            await message.reply(`Oda zaten dolu, ${member.user.username} davet edilemedi.`);
+                            break;
+                        }
+                        if (game.players.some(p => p.id === member.id)) {
+                            await message.reply(`${member.user.username} zaten odada.`);
+                            continue;
+                        }
+                        if (member.user.bot) {
+                            await message.reply('Botları adam asmaca odasına davet edemezsiniz.');
+                            continue;
+                        }
+
+                        const added = await hangmanManager.addPlayerToRoom(game.id, member, client);
+                        if (added) {
+                            await message.channel.send(`<@${member.id}> odaya davet edildi ve katıldı!`);
+                        } else {
+                            await message.channel.send(`Hata: ${member.user.username} odaya eklenemedi.`);
+                        }
+                    }
+                    return;
+                }
+
+                if (commandName === 'adam-asmaca-odalar') {
+                    const openRooms = hangmanManager.listRooms('acik');
+                    let embedDescription = '';
+
+                    if (openRooms.length === 0) {
+                        embedDescription = 'Şu anda aktif bir açık Adam Asmaca odası bulunmuyor.';
+                    } else {
+                        embedDescription = openRooms.map(room => 
+                            `**ID:** \`${room.id}\` | **Kurucu:** <@${room.creatorId}> | **Oyuncular:** ${room.players.length}/${room.maxPlayers} | **Kanal:** <#${room.channelId}>`
+                        ).join('\n');
+                    }
+
+                    const roomsEmbed = new EmbedBuilder()
+                        .setColor('Green')
+                        .setTitle('Aktif Adam Asmaca Odaları')
+                        .setDescription(embedDescription)
+                        .setFooter({ text: 'Katılmak için !adam-asmaca-katıl [ID]' })
+                        .setTimestamp();
+
+                    await message.reply({ embeds: [roomsEmbed] });
+                    return;
+                }
+
+                if (commandName === 'adam-asmaca-katıl') {
+                    const roomId = args[0];
+                    if (!roomId) {
+                        return message.reply('Lütfen katılmak istediğiniz odanın ID\'sini belirtin: `!adam-asmaca-katıl [OdaID]`');
+                    }
+
+                    const game = hangmanManager.activeHangmanGames.get(roomId);
+                    if (!game) {
+                        return message.reply('Belirtilen ID\'ye sahip bir oda bulunamadı veya kapalı.');
+                    }
+                    if (game.type === 'ozel' && game.players.every(p => p.id !== message.author.id) && game.creatorId !== message.author.id) {
+                        return message.reply('Bu özel bir oda ve davetli değilsiniz.');
+                    }
+                    if (game.status !== 'waiting') {
+                        return message.reply('Bu oda zaten başladı veya bitmiş durumda.');
+                    }
+                    if (game.players.some(p => p.id === message.author.id)) {
+                        return message.reply('Zaten bu odadasınız.');
+                    }
+                    if (game.players.length >= game.maxPlayers) {
+                        return message.reply('Bu oda dolu.');
+                    }
+
+                    const added = await hangmanManager.addPlayerToRoom(roomId, message.member, client);
+                    if (added) {
+                        await message.reply(`\`${roomId}\` ID'li odaya başarıyla katıldınız!`);
+                    } else {
+                        await message.reply('Odaya katılırken bir hata oluştu.');
+                    }
+                    return;
+                }
+
+                if (commandName === 'adam-asmaca-ayrıl') {
+                    const game = Array.from(hangmanManager.activeHangmanGames.values()).find(g => g.players.some(p => p.id === message.author.id) && g.status !== 'ended');
+                    if (!game) {
+                        return message.reply('Şu anda aktif bir Adam Asmaca odasında değilsiniz.');
+                    }
+
+                    const removed = await hangmanManager.removePlayerFromRoom(game.id, message.author.id, client);
+                    if (removed) {
+                        await message.reply(`\`${game.id}\` ID'li odadan başarıyla ayrıldınız.`);
+                    } else {
+                        await message.reply('Odadan ayrılırken bir hata oluştu.');
+                    }
+                    return;
+                }
+
+                if (commandName === 'adam-asmaca-at') {
+                    const game = Array.from(hangmanManager.activeHangmanGames.values()).find(g => g.creatorId === message.author.id && g.status !== 'ended');
+                    if (!game) {
+                        return message.reply('Sadece kendi oluşturduğunuz odadan oyuncu atabilirsiniz.');
+                    }
+                    if (message.mentions.members.size === 0) {
+                        return message.reply('Lütfen atmak istediğiniz üyeyi etiketleyin.');
+                    }
+                    const targetMember = message.mentions.members.first();
+                    if (targetMember.id === message.author.id) {
+                        return message.reply('Kendinizi odadan atamazsınız, bunun yerine `!adam-asmaca-ayrıl` komutunu kullanın.');
+                    }
+                    if (!game.players.some(p => p.id === targetMember.id)) {
+                        return message.reply('Bu kişi odada değil.');
+                    }
+
+                    const removed = await hangmanManager.removePlayerFromRoom(game.id, targetMember.id, client, true);
+                    if (removed) {
+                        await message.reply(`${targetMember.user.username} başarıyla odadan atıldı.`);
+                    } else {
+                        await message.reply('Oyuncu atılırken bir hata oluştu.');
+                    }
+                    return;
+                }
+
+                if (commandName === 'adam-asmaca-baslat') {
+                    const game = Array.from(hangmanManager.activeHangmanGames.values()).find(g => g.creatorId === message.author.id && g.status === 'waiting');
+                    if (!game) {
+                        return message.reply('Sadece kendi oluşturduğunuz ve bekleme durumundaki bir oyunu başlatabilirsiniz.');
+                    }
+                    if (game.players.length < 2) {
+                        return message.reply(`Oyunu başlatmak için en az 2 oyuncu olmalı. Şu an: ${game.players.length}/${game.maxPlayers}`);
+                    }
+                
+                    // Bu kısımdaki hatayı yakalamak için try-catch eklendi
+                    try {
+                        const started = await hangmanManager.startGame(game.id, client);
+                        if (started) {
+                            await message.reply(`Adam Asmaca oyunu başarıyla başlatıldı! Kelimeyi tahmin etmeye başlayın.`);
+                        } else {
+                            await message.reply('Oyunu başlatırken bir hata oluştu. Lütfen logları kontrol edin veya bot sahibine bildirin.');
+                        }
+                    } catch (error) {
+                        console.error(`Adam asmaca başlatılırken hata oluştu (game ID: ${game.id}):`, error);
+                        await message.reply('Oyunu başlatırken beklenmedik bir hata oluştu. Lütfen bot sahibine bildirin.');
+                    }
+                    return;
+                }
+                
+                // Bot sahibine özel komutlar
+                if (message.author.id === OWNER_ID) {
+                    if (commandName === 'adam-asmaca-bilgi') {
+                        const allRooms = hangmanManager.listRooms();
+                        let infoDescription = 'Aktif Adam Asmaca Odaları:\n\n';
+                        if (allRooms.length === 0) {
+                            infoDescription = 'Şu anda aktif bir Adam Asmaca odası bulunmuyor.';
+                        } else {
+                            infoDescription += allRooms.map(room =>
+                                `**ID:** \`${room.id}\` | **Kurucu:** <@${room.creatorId}> | **Tip:** ${room.type === 'ozel' ? 'Özel' : 'Açık'} | **Durum:** ${room.status} | **Oyuncular:** ${room.players.length}/${room.maxPlayers} | **Kanal:** <#${room.channelId}>${room.status === 'in_game' ? `\n**Kelime:** ${room.hiddenWord} | Yanlış: ${room.wrongGuesses}` : ''}`
+                            ).join('\n\n');
+                        }
+
+                        const infoEmbed = new EmbedBuilder()
+                            .setColor('Orange')
+                            .setTitle('Adam Asmaca Sistemi Bilgisi')
+                            .setDescription(infoDescription)
+                            .setFooter({ text: 'SomeSub Bot | Sadece Bot Sahibi' })
+                            .setTimestamp();
+                        await message.reply({ embeds: [infoEmbed] });
+                        return;
+                    }
+
+                    if (commandName === 'adam-asmaca-oda-kapat') {
+                        const roomId = args[0];
+                        if (!roomId) {
+                            return message.reply('Lütfen kapatmak istediğiniz odanın ID\'sini belirtin: `!adam-asmaca-oda-kapat [OdaID]`');
+                        }
+                        const closed = await hangmanManager.closeRoomAsOwner(roomId, client);
+                        if (closed) {
+                            await message.reply(`\`${roomId}\` ID'li oda başarıyla kapatıldı.`);
+                        } else {
+                            await message.reply('Belirtilen ID\'ye sahip bir oda bulunamadı veya zaten kapalıydı.');
+                        }
+                        return;
+                    }
+                }
+            } catch (error) { // Tüm prefix komutlarını kapsayan catch bloğu
+                console.error(`[MessageCreate] PREFIX Komutu çalıştırılırken hata: ${commandName}`, error);
+                if (message.replied || message.deferred) {
+                    await message.followUp({ content: 'Bu komutu çalıştırırken bir hata oluştu!', ephemeral: true });
+                } else {
+                    await message.reply({ content: 'Bu komutu çalıştırırken bir hata oluştu! Lütfen bot sahibine bildirin.', ephemeral: true });
+                }
+            }
+        }
+
+        // ---------------------- KELİME TABANLI YANIT SİSTEMLERİ ----------------------
+        // Bu kısım zaten try-catch içinde değil, ancak kritik bir hata durumu yaratmaz genelde.
+        if (settings.saas.active) {
+            const saasKeywords = [
+                'sa', 'selamun aleykum', 'selamün aleyküm', 'selamunaleykum', 'selam', 'selamlar', 'selamünaleyküm', 'sea'
+            ];
+            const isSaasMatch = saasKeywords.some(keyword => {
+                return content === keyword || content.startsWith(keyword + ' ');
+            });
+
+            if (isSaasMatch) {
+                await message.reply('Aleykümselam');
+                return;
+            }
+        }
+
+        if (settings.gunaydin.active) {
+            const gunaydinKeywords = [
+                'günaydın', 'gunaydin', 'güno', 'guno', 'günaydınlar', 'gunaydinlar', 'aydınlar', 'aydınlık', 'iyi sabahlar'
+            ];
+            const isGunaydinMatch = gunaydinKeywords.some(keyword => {
+                return content === keyword || content.startsWith(keyword + ' ');
+            });
+
+            if (isGunaydinMatch) {
+                await message.reply('Günaydın! Kral');
+                return;
+            }
+        }
+
+        // YENİ: Adam Asmaca oyunu devam eden kanalda tahminleri yakala
+        const activeGames = Array.from(hangmanManager.activeHangmanGames.values());
+        const gameInChannel = activeGames.find(g => g.channelId === message.channel.id && g.status === 'in_game');
+
+        if (gameInChannel && gameInChannel.currentPlayerId === message.author.id) {
+            const guess = message.content.toLowerCase();
+            // Tahmin butondan değil, doğrudan mesajla geldiyse işle
+            if (guess.length === 1 || guess.length > 1) { 
+                try { // Tahmin işlemine de try-catch eklendi
+                    const processed = await hangmanManager.handleGuess(gameInChannel.id, message.author.id, guess, client);
+                    if (processed) {
+                        await message.delete().catch(console.error); 
+                    }
+                } catch (error) {
+                    console.error(`Adam asmaca tahmini işlenirken hata oluştu (game ID: ${gameInChannel.id}, user: ${message.author.tag}):`, error);
+                    // KullanıcıyaEphemeral bir mesaj göndermeye gerek yok, sadece log tutabiliriz.
+                }
+            }
+            return;
+        } else if (gameInChannel && gameInChannel.players.some(p => p.id === message.author.id) && gameInChannel.currentPlayerId !== message.author.id) {
+            // Sadece kendi sırası olmayan oyuncuların mesajlarını silmek için
+            await message.delete().catch(console.error);
+            return;
+        } else if (gameInChannel && !gameInChannel.players.some(p => p.id === message.author.id)) {
+            // Oyunda olmayanların mesajlarını silmek için
+            await message.delete().catch(console.error);
+            return;
+        }
+    },
+};
